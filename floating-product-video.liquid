@@ -1,0 +1,105 @@
+<div class="floating-product-video">
+
+  {% if section.settings.video != blank %}
+    <div class="floating-video">
+
+      <button
+        class="video-close"
+        type="button"
+        aria-label="Close video">
+        ×
+      </button>
+
+      {{
+        section.settings.video
+        | video_tag:
+          autoplay: true,
+          loop: true,
+          muted: true,
+          controls: true,
+          playsinline: true
+      }}
+
+    </div>
+  {% endif %}
+
+</div>
+
+<style>
+  .floating-video {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    width: 280px;
+    aspect-ratio: 9 / 16;
+    overflow: hidden;
+    border-radius: 16px;
+    background: #000;
+    box-shadow: 0 10px 35px rgba(0,0,0,.18);
+    z-index: 9999;
+  }
+
+  .floating-video video {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .video-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 30px;
+    height: 30px;
+    border: 0;
+    border-radius: 50%;
+    background: #fff;
+    color: #111;
+    font-size: 20px;
+    cursor: pointer;
+    z-index: 2;
+  }
+
+  @media (max-width: 749px) {
+    .floating-video {
+      width: 190px;
+      right: 14px;
+      bottom: 14px;
+      border-radius: 12px;
+    }
+  }
+</style>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+
+    const closeButton = document.querySelector('.video-close');
+    const videoBox = document.querySelector('.floating-video');
+
+    if (closeButton && videoBox) {
+      closeButton.addEventListener('click', function () {
+        videoBox.remove();
+      });
+    }
+
+  });
+</script>
+
+{% schema %}
+{
+  "name": "Floating Product Video",
+  "settings": [
+    {
+      "type": "video",
+      "id": "video",
+      "label": "Product Video"
+    }
+  ],
+  "presets": [
+    {
+      "name": "Floating Product Video"
+    }
+  ]
+}
+{% endschema %}
