@@ -1,0 +1,202 @@
+{%- comment -%}
+  snippets/delivery-checker.liquid
+  Usage: {% render 'delivery-checker' %}
+  Optional: {% render 'delivery-checker', cutoff_hour: 16, handling_days: 1 %}
+{%- endcomment -%}
+
+{%- assign cutoff_hour = cutoff_hour | default: 16 -%}
+{%- assign handling_days = handling_days | default: 1 -%}
+
+<div class="delivery-checker" id="delivery-checker"
+     data-cutoff="{{ cutoff_hour }}" data-handling="{{ handling_days }}">
+  <p class="dc-title">Check delivery</p>
+
+  <!-- Step 1: enter PIN -->
+  <form class="dc-form" id="dc-form" novalidate>
+    <input id="dc-input" class="dc-input" type="text" inputmode="numeric"
+           maxlength="6" autocomplete="postal-code"
+           placeholder="Enter PIN code" aria-label="PIN code">
+    <button type="submit" class="dc-btn">Check</button>
+  </form>
+  <p class="dc-error" id="dc-error" role="alert" hidden></p>
+
+  <!-- Step 2: result -->
+  <div class="dc-result" id="dc-result" hidden>
+    <div class="dc-row dc-pin-row">
+      <strong id="dc-pin"></strong>
+      <button type="button" class="dc-change" id="dc-change">Change</button>
+    </div>
+
+    <div class="dc-row">
+      <svg class="dc-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h11v9H3zM14 9h4l3 3v3h-7zM7 18.5a1.5 1.5 0 1 0 0 .01M17 18.5a1.5 1.5 0 1 0 0 .01" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
+      <span class="dc-badge" id="dc-date"></span>
+    </div>
+
+    <div class="dc-row" id="dc-cod-row">
+      <svg class="dc-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      <span id="dc-cod"></span>
+    </div>
+
+    <div class="dc-row">
+      <svg class="dc-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s7-6.2 7-11.5A7 7 0 0 0 5 9.5C5 14.8 12 21 12 21z" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="9.5" r="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+      <span id="dc-city"></span>
+    </div>
+  </div>
+</div>
+
+<style>
+  .delivery-checker{
+    --dc-green:#0b5d3b; --dc-green-bg:#e3f2e9; --dc-red:#d81b4a;
+    --dc-line:#e4e4e4; --dc-text:#1a1a1a; --dc-muted:#6b6b6b;
+    max-width:460px; margin:1.5rem 0; padding:16px 18px;
+    border:1px solid var(--dc-line); border-radius:12px;
+    background:#fff; color:var(--dc-text); font-size:15px;
+  }
+  .dc-title{margin:0 0 10px; font-size:13px; letter-spacing:.08em; text-transform:uppercase; color:var(--dc-muted)}
+  .dc-form{display:flex; gap:8px}
+  .dc-input{flex:1; min-width:0; padding:11px 12px; font-size:16px; border:1px solid var(--dc-line); border-radius:8px}
+  .dc-input:focus-visible,.dc-btn:focus-visible,.dc-change:focus-visible{outline:2px solid var(--dc-green); outline-offset:2px}
+  .dc-btn{padding:0 20px; border:0; border-radius:8px; background:var(--dc-green); color:#fff; font-weight:600; cursor:pointer}
+  .dc-btn:disabled{opacity:.6; cursor:wait}
+  .dc-error{margin:8px 0 0; color:var(--dc-red); font-size:14px}
+  .dc-result{border:1px solid var(--dc-line); border-radius:10px; overflow:hidden}
+  .dc-row{display:flex; align-items:center; gap:10px; padding:10px 14px}
+  .dc-pin-row{justify-content:space-between; border-bottom:1px solid var(--dc-line); font-size:18px}
+  .dc-change{background:none; border:0; padding:0; color:var(--dc-red); font-weight:600; cursor:pointer}
+  .dc-ico{width:22px; height:22px; flex:none; color:var(--dc-muted)}
+  .dc-badge{padding:6px 12px; border-radius:8px; background:var(--dc-green-bg); color:var(--dc-green); font-weight:600}
+  [hidden]{display:none !important}
+</style>
+
+<script>
+(function () {
+  var root = document.getElementById('delivery-checker');
+  if (!root) return;
+
+  /* ======== EDIT THIS SECTION ======== */
+  // Delivery days by PIN prefix. Longest matching prefix wins.
+  var RULES = [
+    { prefix: '2260', days: 2, cod: true  },   // Lucknow
+    { prefix: '22',   days: 3, cod: true  },   // Rest of Uttar Pradesh
+    { prefix: '11',   days: 3, cod: true  },   // Delhi
+    { prefix: '40',   days: 4, cod: true  },   // Maharashtra (Mumbai)
+    { prefix: '56',   days: 4, cod: true  },   // Bengaluru
+    { prefix: '78',   days: 8, cod: false },   // North East
+    { prefix: '19',   days: 9, cod: false }    // Jammu & Kashmir
+  ];
+  var DEFAULT_RULE = { days: 6, cod: true };   // any other valid PIN
+  var BLOCKED_PREFIXES = [];                   // e.g. ['1940'] = not serviceable
+  var SKIP_SUNDAY = true;                      // no deliveries on Sunday
+  var LOOKUP_CITY = true;                      // fetch city name from India Post API
+  /* =================================== */
+
+  var CUTOFF = parseInt(root.dataset.cutoff, 10);
+  var HANDLING = parseInt(root.dataset.handling, 10);
+  var KEY = 'dc_pin';
+
+  var form = document.getElementById('dc-form');
+  var input = document.getElementById('dc-input');
+  var errEl = document.getElementById('dc-error');
+  var result = document.getElementById('dc-result');
+  var btn = form.querySelector('.dc-btn');
+
+  function findRule(pin) {
+    var best = null;
+    RULES.forEach(function (r) {
+      if (pin.indexOf(r.prefix) === 0 && (!best || r.prefix.length > best.prefix.length)) best = r;
+    });
+    return best || DEFAULT_RULE;
+  }
+
+  function blocked(pin) {
+    return BLOCKED_PREFIXES.some(function (p) { return pin.indexOf(p) === 0; });
+  }
+
+  function addBusinessDays(start, n) {
+    var d = new Date(start);
+    while (n > 0) {
+      d.setDate(d.getDate() + 1);
+      if (!(SKIP_SUNDAY && d.getDay() === 0)) n--;
+    }
+    return d;
+  }
+
+  function formatDate(d) {
+    var wd = d.toLocaleDateString('en-IN', { weekday: 'short' });
+    var mo = d.toLocaleDateString('en-IN', { month: 'short' });
+    return wd + ', ' + d.getDate() + ' ' + mo;
+  }
+
+  function showError(msg) {
+    errEl.textContent = msg;
+    errEl.hidden = false;
+    result.hidden = true;
+    form.hidden = false;
+  }
+
+  function fetchCity(pin) {
+    if (!LOOKUP_CITY) return Promise.resolve(null);
+    return fetch('https://api.postalpincode.in/pincode/' + pin)
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var o = j && j[0] && j[0].PostOffice && j[0].PostOffice[0];
+        return o ? (o.District || o.Name) : null;
+      })
+      .catch(function () { return null; });
+  }
+
+  function render(pin, city) {
+    var rule = findRule(pin);
+    var start = new Date();
+    var extra = HANDLING + (start.getHours() >= CUTOFF ? 1 : 0); // after cutoff, ship next day
+    var eta = addBusinessDays(start, extra + rule.days);
+
+    document.getElementById('dc-pin').textContent = pin;
+    document.getElementById('dc-date').textContent = 'Get it by ' + formatDate(eta);
+    document.getElementById('dc-cod').textContent =
+      rule.cod ? 'Cash on delivery available' : 'Cash on delivery not available';
+    document.getElementById('dc-city').textContent = city ? 'Shipping to ' + city : 'Shipping to your location';
+
+    errEl.hidden = true;
+    form.hidden = true;
+    result.hidden = false;
+  }
+
+  function check(pin) {
+    if (!/^[1-9][0-9]{5}$/.test(pin)) {
+      return showError('Enter a valid 6-digit PIN code.');
+    }
+    if (blocked(pin)) {
+      return showError('Sorry, we don’t deliver to this PIN code yet.');
+    }
+    btn.disabled = true;
+    fetchCity(pin).then(function (city) {
+      btn.disabled = false;
+      render(pin, city);
+      try { localStorage.setItem(KEY, pin); } catch (e) {}
+    });
+  }
+
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    check(input.value.trim());
+  });
+
+  input.addEventListener('input', function () {
+    input.value = input.value.replace(/\D/g, '');
+  });
+
+  document.getElementById('dc-change').addEventListener('click', function () {
+    result.hidden = true;
+    form.hidden = false;
+    input.focus();
+    input.select();
+  });
+
+  // Restore last PIN
+  try {
+    var saved = localStorage.getItem(KEY);
+    if (saved) { input.value = saved; check(saved); }
+  } catch (e) {}
+})();
+</script>
